@@ -15,7 +15,7 @@ import {
 import { firebaseConfig } from './firebase-config.js';
 
 // 每次修改程式就改這個字串，到「設定 → 帳號」可以確認手機跑的是哪一版
-const APP_VERSION = '2026-10-01 有氧版';
+const APP_VERSION = '2026-10-01 快速啟動版';
 
 /* ---------- 1. Firebase 初始化 ---------- */
 const CONFIGURED = !!(firebaseConfig && firebaseConfig.apiKey && !String(firebaseConfig.apiKey).startsWith('YOUR'));
@@ -112,12 +112,16 @@ const view = $('#view');
 const nav = $('nav.tabs');
 
 /* ---------- 4. 狀態 ---------- */
+// 記住「這台手機登入過」：重新開啟 app 時先顯示載入畫面，而不是閃一下登入畫面
+const HINT = 'gymlog.signedIn';
+const hint = { get(){ try { return localStorage.getItem(HINT) === '1'; } catch(e){ return false; } },
+               set(v){ try { v ? localStorage.setItem(HINT, '1') : localStorage.removeItem(HINT); } catch(e){} } };
 function freshState(){
   return {
     tab:'train', date:today(), sessions:{}, body:{weights:{}, waists:{}},
     tpl:normTemplate(null), tplDay:'upper',
     edited:new Set(), open:null, range:30, bodyDate:today(), needRender:false,
-    mode: CONFIGURED ? 'auth' : 'setup',       // setup | auth | loading | ready
+    mode: !CONFIGURED ? 'setup' : (hint.get() ? 'boot' : 'auth'),   // setup | boot | auth | loading | ready
     user:null, authMode:'login', authMsg:'', authErr:false, authBusy:false,
     ready:{sess:false, body:false, tpl:false}, pending:{sess:false, body:false, tpl:false},
     syncErr:null, todayAtOpen:today()
@@ -161,6 +165,8 @@ const errMsg = e => (e && (AUTH_ERR[e.code] || (e.code === 'permission-denied' ?
 let unsubs = [];
 if (CONFIGURED){
   onAuthStateChanged(auth, u => { if (u) startUser(u); else stopUser(); });
+  // 保險：萬一 10 秒都沒有結果，就顯示登入畫面
+  setTimeout(() => { if (S.mode === 'boot'){ S.mode = 'auth'; render(); } }, 10000);
 }
 
 function startUser(u){
@@ -170,6 +176,7 @@ function startUser(u){
   S.tab = keepTab === 'set' ? 'set' : 'train';
   S.user = { uid:u.uid, email:u.email || '' };
   S.mode = 'loading';
+  hint.set(true);
   const uid = u.uid;
   const onErr = e => { S.syncErr = errMsg(e); updateSync(); };
 
@@ -212,6 +219,7 @@ function startUser(u){
 function stopListeners(){ unsubs.forEach(f => { try { f(); } catch(e){} }); unsubs = []; }
 function stopUser(){
   stopListeners();
+  hint.set(false);
   Object.keys(timers).forEach(k => { clearTimeout(timers[k]); delete timers[k]; });
   S = freshState();
   nav.hidden = true;
@@ -284,7 +292,7 @@ function updateSync(){
   const el = $('#sync');
   const err = !!S.syncErr;
   el.classList.toggle('err', err);
-  if (S.mode === 'setup' || S.mode === 'auth'){ el.textContent = ''; return; }
+  if (S.mode === 'setup' || S.mode === 'auth' || S.mode === 'boot'){ el.textContent = ''; return; }
   if (err) el.textContent = S.syncErr;
   else if (S.mode === 'loading') el.textContent = '載入中…';
   else if (Object.keys(timers).length) el.textContent = '儲存中…';
@@ -338,6 +346,7 @@ function softRender(){
 function render(){
   S.needRender = false;
   if (S.mode === 'setup'){ view.innerHTML = setupView(); return; }
+  if (S.mode === 'boot'){ view.innerHTML = '<p class="empty">正在開啟…</p>'; return; }
   if (S.mode === 'auth'){ view.innerHTML = authView(); return; }
   document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
   if (S.mode === 'loading' && S.tab !== 'set'){ view.innerHTML = '<p class="empty">正在載入你的資料…</p>'; return; }
