@@ -5,7 +5,7 @@
 // =============================================================
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import {
-  getAuth, onAuthStateChanged, signInWithEmailAndPassword,
+  getAuth, initializeAuth, browserLocalPersistence, indexedDBLocalPersistence, onAuthStateChanged, signInWithEmailAndPassword,
   createUserWithEmailAndPassword, sendPasswordResetEmail, signOut
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
@@ -15,14 +15,20 @@ import {
 import { firebaseConfig } from './firebase-config.js';
 
 // 每次修改程式就改這個字串，到「設定 → 帳號」可以確認手機跑的是哪一版
-const APP_VERSION = '2026-10-01 快速啟動版';
+const APP_VERSION = '2026-10-01 快速啟動版 2';
 
 /* ---------- 1. Firebase 初始化 ---------- */
 const CONFIGURED = !!(firebaseConfig && firebaseConfig.apiKey && !String(firebaseConfig.apiKey).startsWith('YOUR'));
 let auth = null, db = null;
 if (CONFIGURED){
   const app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
+  try {
+    // 登入狀態優先存在 localStorage：iPhone 冷啟動時讀取比 IndexedDB 快很多。
+    // 舊版存在 IndexedDB 的登入狀態會自動搬過來，不需要重新登入。
+    auth = initializeAuth(app, { persistence: [browserLocalPersistence, indexedDBLocalPersistence] });
+  } catch (e) {
+    auth = getAuth(app);
+  }
   try {
     // 離線快取：沒網路時照樣能讀寫，連線後自動上傳
     db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
@@ -164,7 +170,18 @@ const errMsg = e => (e && (AUTH_ERR[e.code] || (e.code === 'permission-denied' ?
 
 let unsubs = [];
 if (CONFIGURED){
-  onAuthStateChanged(auth, u => { if (u) startUser(u); else stopUser(); });
+  let graceT = null;
+  onAuthStateChanged(auth, u => {
+    clearTimeout(graceT);
+    if (u){ startUser(u); return; }
+    // 這台手機登入過，但 Firebase 一開始回報「未登入」：
+    // 通常是登入狀態還沒讀完，再等最多 4 秒，期間繼續顯示啟動畫面
+    if (S.mode === 'boot' && hint.get()){
+      graceT = setTimeout(() => { if (!auth.currentUser) stopUser(); }, 4000);
+      return;
+    }
+    stopUser();
+  });
   // 保險：萬一 10 秒都沒有結果，就顯示登入畫面
   setTimeout(() => { if (S.mode === 'boot'){ S.mode = 'auth'; render(); } }, 10000);
 }
@@ -346,16 +363,22 @@ function softRender(){
 function render(){
   S.needRender = false;
   if (S.mode === 'setup'){ view.innerHTML = setupView(); return; }
-  if (S.mode === 'boot'){ view.innerHTML = '<p class="empty">正在開啟…</p>'; return; }
+  if (S.mode === 'boot'){ view.innerHTML = splashView(); return; }
   if (S.mode === 'auth'){ view.innerHTML = authView(); return; }
   document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
-  if (S.mode === 'loading' && S.tab !== 'set'){ view.innerHTML = '<p class="empty">正在載入你的資料…</p>'; return; }
+  if (S.mode === 'loading' && S.tab !== 'set'){ view.innerHTML = splashView(); return; }
   if (S.tab === 'train') view.innerHTML = trainView();
   else if (S.tab === 'body') view.innerHTML = bodyView();
   else if (S.tab === 'hist') view.innerHTML = histView();
   else view.innerHTML = setView();
 }
 
+function splashView(){
+  return `<div class="splash" role="status" aria-label="正在開啟">
+    <div class="plates"><span class="plate d-upper"></span><span class="plate d-lower"></span><span class="plate d-full"></span><span class="plate d-cardio"></span></div>
+    <p>正在開啟…</p>
+  </div>`;
+}
 function setupView(){
   return `<div class="setup"><b>還沒設定 Firebase。</b><p>請打開 <code>firebase-config.js</code>，貼上 Firebase 主控台給你的設定後重新上傳（教學步驟一、三）。</p></div>`;
 }
@@ -878,6 +901,7 @@ view.addEventListener('click', async ev => {
   if (t.id === 'logout'){
     if (!confirm('確定要登出？')) return;
     flushAll();
+    hint.set(false);
     await signOut(auth);
     return;
   }
