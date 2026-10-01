@@ -42,7 +42,13 @@
 <script>
   // 註冊 service worker（離線快取程式檔）
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    // 新版 service worker 接手時自動重新整理一次，讓更新立刻生效
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController && !reloaded) { reloaded = true; location.reload(); }
+    });
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {}));
   }
 </script>
 </body>

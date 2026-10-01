@@ -14,6 +14,9 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from './firebase-config.js';
 
+// 每次修改程式就改這個字串，到「設定 → 帳號」可以確認手機跑的是哪一版
+const APP_VERSION = '2026-10-01 有氧版';
+
 /* ---------- 1. Firebase 初始化 ---------- */
 const CONFIGURED = !!(firebaseConfig && firebaseConfig.apiKey && !String(firebaseConfig.apiKey).startsWith('YOUR'));
 let auth = null, db = null;
@@ -587,7 +590,7 @@ function setView(){
   </section>
   <section class="panel">
     <h2>帳號</h2>
-    <p class="hint">目前登入：${esc(S.user ? S.user.email : '')}<br>你的資料只有你自己看得到。</p>
+    <p class="hint">目前登入：${esc(S.user ? S.user.email : '')}<br>你的資料只有你自己看得到。<br>程式版本：${APP_VERSION}</p>
     <div class="btnrow">
       <button type="button" class="ghost" id="pwReset">寄送重設密碼信</button>
       <button type="button" class="ghost danger" id="logout">登出</button>
