@@ -68,9 +68,16 @@ const DEFAULT_T = {
     {n:'臉拉',s:3,r:'12-20',opt:true},
     {n:'繩索斜向捲腹',s:3,r:'10-15'},
     {n:'負重懸吊抬腿',s:3,r:'10-15'}
+  ]},
+  // 有氧：kind:'cardio' 的動作記錄「分鐘＋距離」；s = 幾段，r = 目標分鐘區間
+  cardio:{label:'有氧', ex:[
+    {n:'跑步機（快走／慢跑）',s:1,r:'20-40',kind:'cardio'},
+    {n:'飛輪',s:1,r:'20-40',kind:'cardio'},
+    {n:'划船機',s:1,r:'10-20',kind:'cardio'},
+    {n:'滑步機',s:1,r:'20-40',kind:'cardio',opt:true}
   ]}
 };
-const DAYS = ['upper','lower','full'];
+const DAYS = ['upper','lower','full','cardio'];
 const WK = '日一二三四五六';
 
 /* ---------- 3. 小工具 ---------- */
@@ -89,6 +96,14 @@ const clampInt = (v, lo, hi, def) => { const n = Math.round(Number(v)); return i
 const clone = o => JSON.parse(JSON.stringify(o));
 const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s);
 const hiRep = r => { const p = String(r || '').split('-'); return Number(p[p.length-1]); };  // '8-12' → 12
+// 一組資料：重訓 {w 重量, r 次數}；有氧 {m 分鐘, d 距離km}
+const SET_KEYS = ['w','r','m','d'];
+function normSet(x){ const o = {}; for (const k of SET_KEYS){ const v = x && x[k] != null && x[k] !== '' ? +x[k] : null; if (v != null && isFinite(v)) o[k] = v; } return o; }
+const hasData = x => !!x && SET_KEYS.some(k => x[k] != null);
+const isDone = x => !!x && ((x.r > 0) || (x.m > 0));
+const fmtSet = x => (x.m != null || x.d != null)
+  ? `${x.m != null ? +x.m + '分' : '—'}${x.d != null ? ' ' + (+x.d) + 'km' : ''}`
+  : `${fmtW(x.w)}×${x.r}`;
 const $ = sel => document.querySelector(sel);
 const view = $('#view');
 const nav = $('nav.tabs');
@@ -116,7 +131,8 @@ function normTemplate(o){
     const list = src && Array.isArray(src.ex) ? src.ex : def.ex;
     out[k] = { label, ex: list.filter(e => e && e.n != null).map(e => ({
       n: String(e.n).slice(0, 30), s: clampInt(e.s, 1, 10, 3), r: String(e.r || '8-12').slice(0, 9),
-      note: e.note ? String(e.note).slice(0, 10) : '', opt: !!e.opt
+      note: e.note ? String(e.note).slice(0, 10) : '', opt: !!e.opt,
+      kind: e.kind === 'cardio' ? 'cardio' : 'strength'
     })) };
   }
   return out;
@@ -207,7 +223,7 @@ function afterSnap(){
 function normSession(o, k){
   const sets = {};
   if (o && o.sets && typeof o.sets === 'object'){
-    for (const n in o.sets){ if (Array.isArray(o.sets[n])) sets[n] = o.sets[n].map(x => ({w: x && x.w != null ? +x.w : null, r: x && x.r != null ? +x.r : null})); }
+    for (const n in o.sets){ if (Array.isArray(o.sets[n])) sets[n] = o.sets[n].map(normSet); }
   }
   return {date:k, day: DAYS.includes(o && o.day) ? o.day : 'upper', sets, extras: Array.isArray(o && o.extras) ? o.extras.map(String) : []};
 }
@@ -227,7 +243,7 @@ function clean(s){
   if (!s) return null;
   const sets = {};
   for (const k in s.sets){
-    const a = (s.sets[k] || []).filter(x => x && (x.w != null || x.r != null)).map(x => ({w:x.w, r:x.r}));
+    const a = (s.sets[k] || []).filter(hasData).map(normSet);
     if (a.length) sets[k] = a;
   }
   if (!Object.keys(sets).length && !(s.extras || []).length) return null;
@@ -251,7 +267,9 @@ function flush(key){
   else {
     const d = key.slice(2), c = clean(S.sessions[d]);
     p = c ? setDoc(R.sess(uid, d), c) : deleteDoc(R.sess(uid, d));
-    S.edited.delete(d);
+    // 還有剛新增、尚未填寫的空白組時，保留本機版本，避免空白列被雲端資料蓋掉
+    const ss = S.sessions[d];
+    if (!(ss && Object.values(ss.sets).some(a => a.some(x => !hasData(x))))) S.edited.delete(d);
   }
   // 不 await：Firestore 會先寫進手機，離線時等連線後自動上傳
   p.then(() => { S.syncErr = null; updateSync(); }).catch(e => { S.syncErr = errMsg(e); updateSync(); });
@@ -279,7 +297,7 @@ function toast(msg){ const t = $('#toast'); t.textContent = msg; t.classList.add
 /* ---------- 訓練日小工具 ---------- */
 function defaultDay(date){
   const w = parse(date).getDay();
-  return ({1:'upper',2:'upper',3:'lower',4:'lower',5:'full',6:'full'})[w] || 'upper';
+  return ({0:'cardio',1:'upper',2:'upper',3:'lower',4:'lower',5:'full',6:'full'})[w] || 'upper';
 }
 function getSession(create){
   let s = S.sessions[S.date];
@@ -290,7 +308,8 @@ function exList(day, s){
   const tpl = S.tpl[day].ex.filter(e => e.n.trim()).map(e => Object.assign({}, e, {n:e.n.trim()}));
   const names = new Set(tpl.map(e => e.n));
   const extra = [];
-  const add = n => { if (!names.has(n)){ names.add(n); extra.push({n, s:3, r:'8-12', custom:true}); } };
+  const cardioDay = day === 'cardio';
+  const add = n => { if (!names.has(n)){ names.add(n); extra.push({n, s:cardioDay ? 1 : 3, r:cardioDay ? '20-40' : '8-12', custom:true, kind:cardioDay ? 'cardio' : 'strength'}); } };
   (s ? s.extras : []).forEach(add);
   Object.keys(s ? s.sets : {}).forEach(add);
   return tpl.concat(extra);
@@ -299,12 +318,12 @@ function lastFor(name, before){
   const ds = Object.keys(S.sessions).filter(d => d < before).sort().reverse();
   for (const d of ds){
     const st = (S.sessions[d].sets || {})[name];
-    const done = (st || []).filter(x => x && x.r > 0);
+    const done = (st || []).filter(isDone);
     if (done.length) return {date:d, sets:done};
   }
   return null;
 }
-const doneCount = arr => (arr || []).filter(x => x && x.r > 0).length;
+const doneCount = arr => (arr || []).filter(isDone).length;
 function markEdit(){ S.edited.add(S.date); }
 
 /* ---------- 7. 畫面 ---------- */
@@ -381,11 +400,18 @@ function card(e, s){
   const sets = (s && s.sets[e.n]) || [];
   const last = lastFor(e.n, S.date);
   const hi = hiRep(e.r);
-  const up = !e.custom && isFinite(hi) && last && last.sets.length >= e.s && last.sets.every(x => x.r >= hi);
-  const lastTxt = last ? `上次 ${md(last.date)}：` + last.sets.map(x => `${fmtW(x.w)}×${x.r}`).join('、') : '第一次記錄這個動作';
+  const cardio = e.kind === 'cardio';
+  const up = !e.custom && isFinite(hi) && last && last.sets.length >= e.s && last.sets.every(x => (cardio ? x.m : x.r) >= hi);
+  const lastTxt = last ? `上次 ${md(last.date)}：` + last.sets.map(fmtSet).join('、') : '第一次記錄這個動作';
   const done = doneCount(sets);
   const rows = sets.map((x, i) => {
     const ph = last && (last.sets[i] || last.sets[last.sets.length-1]);
+    if (cardio) return `<div class="set" data-i="${i}">
+      <span class="idx">${i+1}</span>
+      <label class="fld"><input class="m" inputmode="decimal" autocomplete="off" aria-label="第${i+1}段時間（分鐘）" value="${x.m == null ? '' : x.m}" placeholder="${ph && ph.m != null ? ph.m : ''}"><span>分</span></label>
+      <label class="fld"><input class="d" inputmode="decimal" autocomplete="off" aria-label="第${i+1}段距離（公里，選填）" value="${x.d == null ? '' : x.d}" placeholder="${ph && ph.d != null ? ph.d : ''}"><span>km</span></label>
+      <button type="button" class="del" aria-label="刪除第${i+1}段">×</button>
+    </div>`;
     return `<div class="set" data-i="${i}">
       <span class="idx">${i+1}</span>
       <label class="fld"><input class="w" inputmode="decimal" autocomplete="off" aria-label="第${i+1}組重量（公斤，自重填 0）" value="${x.w == null ? '' : x.w}" placeholder="${ph && ph.w != null ? ph.w : ''}"><span>kg</span></label>
@@ -396,14 +422,14 @@ function card(e, s){
   return `<article class="ex${e.opt ? ' opt' : ''}" data-ex="${esc(e.n)}" data-target="${e.s}">
     <div class="exh">
       <h3>${esc(e.n)}</h3>
-      <span class="tgt">${e.custom ? '自訂' : `${e.s} × ${esc(e.r)}${e.note ? ' ' + esc(e.note) : ''}`}</span>
+      <span class="tgt">${e.custom ? '自訂' : (cardio ? `${e.s > 1 ? e.s + ' 段 × ' : ''}${esc(e.r)} 分鐘` : `${e.s} × ${esc(e.r)}`) + (e.note ? ' ' + esc(e.note) : '')}</span>
       ${e.opt ? '<span class="badge">有時間再做</span>' : ''}
       <span class="cnt ${done >= e.s ? 'full' : ''}">${done}/${e.s}</span>
     </div>
-    ${up ? '<span class="badge up">上次全部達標，這次加重</span>' : ''}
+    ${up ? `<span class="badge up">${cardio ? '上次達到目標時間，這次可以加快速度或阻力' : '上次全部達標，這次加重'}</span>` : ''}
     <p class="last">${esc(lastTxt)}</p>
     <div class="sets">${rows}</div>
-    <button type="button" class="addset">＋ 新增一組</button>
+    <button type="button" class="addset">＋ 新增一${cardio ? '段' : '組'}</button>
   </article>`;
 }
 
@@ -498,11 +524,11 @@ function histView(){
   if (!ds.length) return '<p class="empty">還沒有訓練紀錄。到「訓練」分頁記下第一組。</p>';
   return ds.map(d => {
     const s = S.sessions[d];
-    const names = Object.keys(s.sets).filter(n => (s.sets[n] || []).some(x => x && (x.r != null || x.w != null)));
+    const names = Object.keys(s.sets).filter(n => (s.sets[n] || []).some(hasData));
     const total = names.reduce((a, n) => a + doneCount(s.sets[n]), 0);
     const open = S.open === d;
     const detail = open ? `<div class="hbody">
-      ${names.map(n => `<p><b>${esc(n)}</b>　<span class="nums">${s.sets[n].filter(x => x && x.r > 0).map(x => `${fmtW(x.w)}×${x.r}`).join('、') || '—'}</span></p>`).join('')}
+      ${names.map(n => `<p><b>${esc(n)}</b>　<span class="nums">${s.sets[n].filter(isDone).map(fmtSet).join('、') || '—'}</span></p>`).join('')}
       <div class="hact"><button type="button" class="ghost" data-goto="${d}">到這天修改</button><button type="button" class="ghost danger" data-delsess="${d}">刪除這天</button></div>
     </div>` : '';
     return `<div class="hrow d-${s.day}">
@@ -515,30 +541,31 @@ function histView(){
 /* 設定分頁：我的課表、備份、帳號 */
 function setView(){
   const k = S.tplDay, day = S.tpl[k];
-  const rows = day.ex.map((e, i) => `
+  const rows = day.ex.map((e, i) => { const c = e.kind === 'cardio'; return `
     <div class="tpl-ex" data-ti="${i}">
       <div class="r1">
         <label class="sr" for="tn${i}">動作名稱</label>
         <input class="tin" id="tn${i}" data-tf="n" maxlength="30" value="${esc(e.n)}" placeholder="動作名稱">
       </div>
       <div class="r2">
-        <div><label for="ts${i}">組數</label><input class="tin" id="ts${i}" data-tf="s" inputmode="numeric" value="${e.s}"></div>
-        <div><label for="tr${i}">次數區間</label><input class="tin" id="tr${i}" data-tf="r" maxlength="9" value="${esc(e.r)}" placeholder="8-12"></div>
+        <div><label for="ts${i}">${c ? '段數' : '組數'}</label><input class="tin" id="ts${i}" data-tf="s" inputmode="numeric" value="${e.s}"></div>
+        <div><label for="tr${i}">${c ? '分鐘區間' : '次數區間'}</label><input class="tin" id="tr${i}" data-tf="r" maxlength="9" value="${esc(e.r)}" placeholder="${c ? '20-40' : '8-12'}"></div>
         <div><label for="tno${i}">備註</label><input class="tin" id="tno${i}" data-tf="note" maxlength="10" value="${esc(e.note)}" placeholder="例：每邊"></div>
       </div>
       <div class="r3">
-        <label><input type="checkbox" data-tf="opt" ${e.opt ? 'checked' : ''}> 選配（有時間再做）</label>
+        <label><input type="checkbox" data-tf="opt" ${e.opt ? 'checked' : ''}> 選配</label>
+        <label><input type="checkbox" data-tf="kind" ${c ? 'checked' : ''}> 有氧</label>
         <span class="sp"></span>
         <button type="button" class="mini" data-tmove="-1" aria-label="上移" ${i === 0 ? 'disabled' : ''}>↑</button>
         <button type="button" class="mini" data-tmove="1" aria-label="下移" ${i === day.ex.length - 1 ? 'disabled' : ''}>↓</button>
         <button type="button" class="mini danger" data-tdel aria-label="刪除這個動作">刪除</button>
       </div>
-    </div>`).join('');
+    </div>`; }).join('');
   const nS = Object.keys(cleanAll()).length;
   return `
   <section class="panel">
     <h2>我的課表</h2>
-    <p class="hint">這裡只會改到你自己的課表，不會影響其他人。改動作名稱後，「上次」紀錄會用新名稱重新對應。</p>
+    <p class="hint">這裡只會改到你自己的課表，不會影響其他人。改動作名稱後，「上次」紀錄會用新名稱重新對應。勾選「有氧」的動作改記分鐘與距離。</p>
     <div class="chips" role="group" aria-label="選擇訓練日">
       ${DAYS.map(d => `<button type="button" class="chip d-${d} ${d === k ? 'on' : ''}" data-tday="${d}" aria-pressed="${d === k}"><span class="plate"></span>${esc(S.tpl[d].label)}</button>`).join('')}
     </div>
@@ -653,6 +680,11 @@ function editTpl(t){
     else if (f === 'r') e.r = t.value.replace(/[–—~～]/g, '-').replace(/\s/g, '').slice(0, 9);
     else if (f === 'note') e.note = t.value.slice(0, 10);
     else if (f === 'opt') e.opt = t.checked;
+    else if (f === 'kind'){
+      e.kind = t.checked ? 'cardio' : 'strength';
+      if (t.checked && /^\d+-\d+$/.test(e.r) && hiRep(e.r) <= 20 && e.s === 3){ e.s = 1; e.r = '20-40'; }
+      render();
+    }
   }
   scheduleSave('tpl', 800);
 }
@@ -660,15 +692,16 @@ function editTpl(t){
 view.addEventListener('input', ev => {
   const t = ev.target;
   if (t.dataset.tf){ if (t.type !== 'checkbox') editTpl(t); return; }
-  if (!(t.classList.contains('w') || t.classList.contains('r'))) return;
+  const fk = ['w','r','m','d'].find(c => t.classList.contains(c));
+  if (!fk) return;
   const cardEl = t.closest('.ex'); if (!cardEl) return;
   const name = cardEl.dataset.ex, i = +t.closest('.set').dataset.i;
   const s = getSession(true);
   const arr = s.sets[name] || (s.sets[name] = []);
-  const o = arr[i] || (arr[i] = {w:null, r:null});
+  const o = arr[i] || (arr[i] = {});
   const n = num(t.value);
-  if (t.classList.contains('w')) o.w = n == null ? null : Math.max(0, n);
-  else o.r = n == null ? null : Math.max(0, Math.round(n));
+  if (n == null) delete o[fk];
+  else o[fk] = fk === 'r' ? Math.max(0, Math.round(n)) : Math.max(0, n);
   markEdit(); updateCount(cardEl, name); scheduleSave('S:' + S.date);
 });
 
@@ -686,7 +719,7 @@ view.addEventListener('change', ev => {
   if (t.id === 'dateIn'){ S.date = t.value || today(); render(); }
   else if (t.id === 'bDate'){ S.bodyDate = t.value || today(); render(); }
   else if (t.id === 'impFile'){ const f = t.files && t.files[0]; t.value = ''; if (f) doImport(f); }
-  else if (t.dataset.tf === 'opt'){ editTpl(t); }
+  else if (t.dataset.tf === 'opt' || t.dataset.tf === 'kind'){ editTpl(t); }
   else if (t.dataset.tf === 'label'){ render(); }
 });
 
@@ -733,14 +766,19 @@ view.addEventListener('click', async ev => {
   if (t.classList.contains('addset') && cardEl){
     const name = cardEl.dataset.ex, s = getSession(true);
     const arr = s.sets[name] || (s.sets[name] = []);
+    const cardio = !!cardEl.querySelector('.addset') && exList(s.day, s).some(e => e.n === name && e.kind === 'cardio');
     const prev = arr[arr.length - 1];
     const last = lastFor(name, S.date);
-    let w = null;
-    if (prev && prev.w != null) w = prev.w;
-    else if (last) w = (last.sets[arr.length] || last.sets[last.sets.length - 1]).w;
-    arr.push({w, r:null});
+    const row = {};
+    if (!cardio){
+      let w = null;
+      if (prev && prev.w != null) w = prev.w;
+      else if (last) w = (last.sets[arr.length] || last.sets[last.sets.length - 1]).w;
+      if (w != null) row.w = w;
+    }
+    arr.push(row);
     markEdit(); render(); scheduleSave('S:' + S.date);
-    const inp = view.querySelector(`.ex[data-ex="${CSS.escape(name)}"] .set:last-child .r`); if (inp) inp.focus();
+    const inp = view.querySelector(`.ex[data-ex="${CSS.escape(name)}"] .set:last-child ${cardio ? '.m' : '.r'}`); if (inp) inp.focus();
     return;
   }
   if (t.classList.contains('del') && cardEl){
@@ -796,7 +834,8 @@ view.addEventListener('click', async ev => {
   /* 設定分頁：課表 */
   if (t.dataset.tday){ S.tplDay = t.dataset.tday; render(); return; }
   if (t.id === 'tAdd'){
-    S.tpl[S.tplDay].ex.push({n:'', s:3, r:'8-12', note:'', opt:false});
+    const cd = S.tplDay === 'cardio';
+    S.tpl[S.tplDay].ex.push({n:'', s:cd ? 1 : 3, r:cd ? '20-40' : '8-12', note:'', opt:false, kind:cd ? 'cardio' : 'strength'});
     render(); scheduleSave('tpl', 800);
     const ins = view.querySelectorAll('.tpl-ex input[data-tf="n"]'); if (ins.length) ins[ins.length - 1].focus();
     return;
