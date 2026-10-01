@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>訓練日誌</title>
+
+<!-- PWA：讓 iPhone「加入主畫面」後以全螢幕 app 形式開啟 -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#ECEEE9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14171A" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="訓練日誌">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+
+<!-- 字型：數字用 Barlow Condensed，中文用系統字型 -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>訓練日誌</h1>
+    <p id="sync" class="sync">載入中…</p>
+  </header>
+  <main id="view"></main>
+</div>
+<nav class="tabs" aria-label="分頁" hidden>
+  <button type="button" data-tab="train" class="on">訓練</button>
+  <button type="button" data-tab="body">體重腰圍</button>
+  <button type="button" data-tab="hist">歷史</button>
+  <button type="button" data-tab="set">設定</button>
+</nav>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="app.js"></script>
+<script>
+  // 註冊 service worker（離線快取程式檔）
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+</script>
+</body>
+</html>
